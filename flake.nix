@@ -24,6 +24,10 @@
         flakeboxLib = flakebox.lib.mkLib pkgs {
           config = {
             github.ci.buildOutputs = [ ".#ci.${projectName}" ];
+            git.pre-commit.enable = false;
+            github.ci.enable = false;
+            github.ci.workflows.flakebox-flakehub-publish.enable = false;
+            convco.commit-msg.enable = false;
           };
         };
 
