@@ -7,3 +7,7 @@
 ## Fixes
 
 - All clippy warnings.
+
+# v0.3.6 - 2026-05-06
+
+- Previous versions undocumented (sorry!)
