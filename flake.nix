@@ -23,6 +23,7 @@
 
         flakeboxLib = flakebox.lib.mkLib pkgs {
           config = {
+            toolchain.channel = "latest";
             github.ci.buildOutputs = [ ".#ci.${projectName}" ];
             git.pre-commit.enable = false;
             github.ci.enable = false;
