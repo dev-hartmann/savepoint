@@ -17,7 +17,7 @@ Arguments:
 Options:
   -f, --filetype <filetype>  Filename extension to watch (eg rs, js, py, java)
   -d, --dryrun               Don't run git commit when tests pass
-  -c, --clear                Clear screen between exections
+  -c, --clear                Clear screen between executions
   -q, --quiet                Don't display test output
   -h, --help                 Print help
   -V, --version              Print version

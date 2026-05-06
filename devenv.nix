@@ -28,7 +28,7 @@
       RUSTFLAGS=-Awarnings watchexec -r --clear=reset -e rs --wrap-process=none "cargo run -q"
     '';
     packages = [ pkgs.watchexec ];
-    description = "Rebuilds and runs app with supressed warnings";
+    description = "Rebuilds and runs app with suppressed warnings";
   };
 
   #

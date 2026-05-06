@@ -1,7 +1,14 @@
 #![expect(clippy::as_conversions)]
 #![expect(unused)]
 #![allow(clippy::missing_const_for_fn)]
-use crate::eyre::eyre;
+use std::env::args;
+use std::ffi::OsStr;
+use std::fs;
+use std::path::Path;
+use std::sync::mpsc;
+use std::sync::mpsc::Receiver;
+use std::time::Duration;
+
 use clap::Parser;
 use color_eyre::Section;
 use color_eyre::eyre::{self, Result};
@@ -9,9 +16,8 @@ use colored::{ColoredString, Colorize};
 use command_run::{Command, Error, Output};
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 use spinners::{Spinner, Spinners};
-use std::env::args;
-use std::{ffi::OsStr, fs, sync::mpsc::Receiver, time::Duration};
-use std::{path::Path, sync::mpsc};
+
+use crate::eyre::eyre;
 
 static ERRFILE: &str = ".checkpoint.error";
 
@@ -26,7 +32,7 @@ struct Cli {
     /// Don't run git commit when tests pass
     #[arg(short, long)]
     dryrun: bool,
-    /// Clear screen between exections
+    /// Clear screen between runs
     #[arg(short, long)]
     clear: bool,
     /// Don't display test output

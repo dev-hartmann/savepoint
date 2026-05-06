@@ -37,6 +37,12 @@ debug = true
 opt-level = "s"
 lto = true
 
+[profile.ci]
+inherits = "dev"
+incremental = false
+debug = "line-tables-only"
+lto = "off"
+
 [lints.clippy]
 # UM, ACTUALLY
 pedantic = { level = "deny", priority = -1 }
