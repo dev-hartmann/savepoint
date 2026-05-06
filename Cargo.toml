@@ -1,6 +1,6 @@
 [package]
 name = "savepoint"
-version = "0.3.8"
+version = "0.3.9"
 authors = ["Tris Oaten <tris@namtao.com>"]
 description = "Can't beat the boss? Load a previous save! A command watcher that commits when you fix errors."
 keywords = ["tdd", "git", "autosave", "extreme-programming"]
