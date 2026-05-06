@@ -3,7 +3,7 @@
 <picture>
   <source height="150px" align="right" media="(prefers-color-scheme: dark)" srcset="/savepoint-white.png">
   <source height="150px" align="right" media="(prefers-color-scheme: light)" srcset="/savepoint.png">
-  <img alt="Savepoint logo" src="savepoint-white.png">
+  <img alt="Savepoint logo" align="right" height="150px" src="savepoint-white.png">
 </picture>
 
 _A command watcher that commits when you fix errors_
