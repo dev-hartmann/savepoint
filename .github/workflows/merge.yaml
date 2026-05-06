@@ -1,0 +1,90 @@
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+
+name: Merge checks
+
+jobs:
+  check:
+    name: Checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+
+      - name: Install rust toolchain
+        uses: dtolnay/rust-toolchain@1.90.0
+        with:
+          components: clippy
+
+      - name: Run cargo check
+        run: cargo check
+
+      - name: Run cargo test
+        run: cargo test
+
+      - name: Run cargo clippy
+        run: cargo clippy -- -D warnings
+
+      - name: Install nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
+
+      - name: Run cargo fmt
+        run: cargo +nightly fmt --all -- --check
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install weasyprint
+        run: |
+          uv venv
+          source ./.venv/bin/activate
+          uv pip install weasyprint
+
+      - name: Export demo presentation as PDF and HTML
+        run: |
+          cat >/tmp/config.yaml <<EOL
+          export:
+            dimensions:
+              rows: 35
+              columns: 135
+          EOL
+          source ./.venv/bin/activate
+          cargo run -- --export-pdf -c /tmp/config.yaml examples/demo.md
+          cargo run -- --export-html -c /tmp/config.yaml examples/demo.md
+
+  nix-flake:
+    name: Validate nix flake
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install nix
+        uses: DeterminateSystems/nix-installer-action@v17
+      - name: Build
+        run: nix build .#dev.presenterm
+
+  bat-assets:
+    name: Validate bat assets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v2
+      - name: Validate assets
+        run: ./bat/verify.sh
+
+  json-schemas:
+    name: Validate JSON schemas
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v2
+      - name: Validate config file schema
+        run: |
+          if ! ./scripts/validate-config-file-schema.sh; then
+            echo -e "\033[31;1mRun ./scripts/generate-config-file-schema.sh to regenerate JSON schema"
+            exit 1
+          fi

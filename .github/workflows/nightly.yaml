@@ -1,0 +1,104 @@
+name: Nightly build
+
+on:
+  schedule:
+    - cron: "0 0 * * *"
+
+env:
+  RELEASE_VERSION: nightly
+
+jobs:
+  vars:
+    name: Set release variables
+    runs-on: ubuntu-latest
+    outputs:
+      timestamp: ${{ steps.set.outputs.timestamp }}
+      git_hash: ${{ steps.set.outputs.git_hash }}
+      latest_nightly_hash: ${{ steps.set.outputs.latest_nightly_hash }}
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v4
+
+      - name: Set variables
+        id: set
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          timestamp=$(date -u)
+          git_hash=$(git rev-parse HEAD)
+          latest_nightly_hash=$(gh release view nightly | sed -n 's/.*based on ref \[\(.*\)\].*/\1/p')
+          echo "timestamp=$timestamp" >> "$GITHUB_OUTPUT"
+          echo "git_hash=$git_hash" >> "$GITHUB_OUTPUT"
+          echo "latest_nightly_hash=$latest_nightly_hash" >> "$GITHUB_OUTPUT"
+
+  publish-github:
+    name: Publish on GitHub
+    runs-on: ${{ matrix.config.OS }}
+    needs: vars
+    # Don't run this if the nightly hash already points to the current hash
+    if: needs.vars.outputs.git_hash != needs.vars.outputs.latest_nightly_hash
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - { OS: ubuntu-latest, TARGET: "x86_64-unknown-linux-gnu" }
+          - { OS: ubuntu-latest, TARGET: "x86_64-unknown-linux-musl" }
+          - { OS: ubuntu-latest, TARGET: "i686-unknown-linux-gnu" }
+          - { OS: ubuntu-latest, TARGET: "i686-unknown-linux-musl" }
+          - { OS: ubuntu-latest, TARGET: "armv5te-unknown-linux-gnueabi" }
+          - { OS: ubuntu-latest, TARGET: "armv7-unknown-linux-gnueabihf" }
+          - { OS: ubuntu-latest, TARGET: "aarch64-unknown-linux-gnu" }
+          - { OS: ubuntu-latest, TARGET: "aarch64-unknown-linux-musl" }
+          - { OS: macos-latest, TARGET: "x86_64-apple-darwin" }
+          - { OS: macos-latest, TARGET: "aarch64-apple-darwin" }
+          - { OS: windows-latest, TARGET: "x86_64-pc-windows-msvc" }
+          - { OS: windows-latest, TARGET: "i686-pc-windows-msvc" }
+
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v4
+
+      - name: Build binary
+        uses: houseabsolute/actions-rust-cross@a448c4b13769d56b63b035024fef8577e1d81915
+        with:
+          command: build
+          toolchain: 1.90.0
+          target: ${{ matrix.config.TARGET }}
+          args: "--locked --release"
+
+      - name: Prepare release assets
+        shell: bash
+        run: |
+          mkdir release/
+          cp {LICENSE,README.md} release/
+          cp target/${{ matrix.config.TARGET }}/release/presenterm release/
+          mv release/ presenterm-${{ env.RELEASE_VERSION }}/
+      - name: Create release artifacts
+        shell: bash
+        run: |
+          if [ "${{ matrix.config.OS }}" = "windows-latest" ]; then
+            7z a -tzip "presenterm-${{ env.RELEASE_VERSION }}-${{ matrix.config.TARGET }}.zip" \
+              presenterm-${{ env.RELEASE_VERSION }}
+            sha512sum "presenterm-${{ env.RELEASE_VERSION }}-${{ matrix.config.TARGET }}.zip" \
+              > presenterm-${{ env.RELEASE_VERSION }}-${{ matrix.config.TARGET }}.zip.sha512
+          else
+            tar -czvf presenterm-${{ env.RELEASE_VERSION }}-${{ matrix.config.TARGET }}.tar.gz \
+              presenterm-${{ env.RELEASE_VERSION }}/
+            shasum -a 512 presenterm-${{ env.RELEASE_VERSION }}-${{ matrix.config.TARGET }}.tar.gz \
+              > presenterm-${{ env.RELEASE_VERSION }}-${{ matrix.config.TARGET }}.tar.gz.sha512
+          fi
+      - name: Upload the release
+        uses: svenstaro/upload-release-action@e2a63377780a8bacc68dcac9b0979ee20ad5a791
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          tag: nightly
+          file: presenterm-${{ env.RELEASE_VERSION }}-${{ matrix.config.TARGET }}.*
+          file_glob: true
+          overwrite: true
+          prerelease: true
+          release_name: Nightly
+          body: |
+            This is a nightly build based on ref [${{ needs.vars.outputs.git_hash }}](https://github.com/mfontanini/presenterm/commit/${{ needs.vars.outputs.git_hash }})
+            Generated on `${{ needs.vars.outputs.timestamp }}`
