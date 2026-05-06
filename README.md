@@ -1,7 +1,7 @@
 ## [Can't beat the boss? Load a previous save!](https://savepoint.namtao.com)
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="/savepoint-white.png">
+  <source height="150px" media="(prefers-color-scheme: dark)" srcset="/savepoint-white.png">
   <source media="(prefers-color-scheme: light)" srcset="/savepoint.png">
   <img alt="Savepoint logo" src="savepoint-white.png">
 </picture>
