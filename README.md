@@ -1,3 +1,12 @@
+# Savepoint
+
+[![crates-badge]][crates-package]  [![nix-badge]][nix-package] 
+
+[nix-badge]: https://img.shields.io/badge/Packaged_for-Nix-5277C3.svg?logo=nixos&labelColor=73C3D5
+[nix-package]: https://github.com/NamtaoProductions/savepoint/blob/main/flake.nix
+[crates-badge]: https://img.shields.io/crates/v/savepoint
+[crates-package]: https://crates.io/crates/savepoint
+
 ## [Can't beat the boss? Load a previous save!](https://savepoint.namtao.com)
 
 <picture>
