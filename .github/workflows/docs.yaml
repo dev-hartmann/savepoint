@@ -1,0 +1,37 @@
+name: Deploy docs
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@v1.10.22
+
+      - name: Install mdbook
+        run: |
+          cargo binstall -y mdbook@0.4.44 mdbook-alerts@0.7.0
+
+      - name: Build the book
+        run: |
+          cd docs
+          mdbook build
+
+      - name: Deploy build to gh-pages branch
+        uses: crazy-max/ghaction-github-pages@v4
+        with:
+          target_branch: gh-pages
+          build_dir: docs/book 
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
