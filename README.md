@@ -7,6 +7,8 @@
 [crates-badge]: https://img.shields.io/crates/v/savepoint
 [crates-package]: https://crates.io/crates/savepoint
 
+[![Nightly build](https://github.com/NamtaoProductions/savepoint/actions/workflows/nightly.yaml/badge.svg)](https://github.com/NamtaoProductions/savepoint/actions/workflows/nightly.yaml)
+
 ## [Can't beat the boss? Load a previous save!](https://savepoint.namtao.com)
 
 <picture>
