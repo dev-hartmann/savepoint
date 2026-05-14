@@ -239,7 +239,6 @@ fn blockforfile(
     }
 }
 
-<<<<<<< HEAD
 fn is_git_available() -> Result<()> {
     // We check that git exists by running git --version
     let mut git_version_command = Command::with_args("git", ["--version"]);
@@ -271,8 +270,6 @@ fn is_git_repo() -> Result<()> {
     })
 }
 
-||||||| parent of 83f9f40 (feat: add uuid dependency and git helper fns and merge_squashed fn)
-=======
 fn current_branch() -> Result<String> {
     let mut command = Command::with_args("git", ["rev-parse", "--abbrev-ref", "HEAD"]);
     command.log_command = false;
@@ -350,7 +347,6 @@ fn merge_squashed(starting_branch: &str, dryrun: bool, msg: Option<&str>) -> Res
     Ok(())
 }
 
->>>>>>> 83f9f40 (feat: add uuid dependency and git helper fns and merge_squashed fn)
 fn commit(msg: &str, dryrun: bool) -> Result<()> {
     if dryrun {
         log(&"(dry run) Autosaving!".green().bold());
