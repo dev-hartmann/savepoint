@@ -5,8 +5,9 @@ use std::env::args;
 use std::ffi::OsStr;
 use std::fs;
 use std::path::Path;
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
+use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 use clap::Parser;
@@ -164,7 +165,8 @@ fn main() -> Result<()> {
         .ok_or_else(|| eyre!("no program arg"))?;
 
     //INFO: Ensure that if dryrun is not active, that the current environment
-    // includes the git command
+    //      includes the git command
+
     if !dryrun {
         // Check wether git is available.
         is_git_available()?;
@@ -173,23 +175,52 @@ fn main() -> Result<()> {
         is_git_repo()?;
     }
 
+    // Get current working branch as ref for later
+    let starting_branch = current_branch()?;
+
+    // Switch to savepoint sub-branch
+    let savepoint_branch = branch(None, dryrun)?;
+
+    // Install Ctrl-C handler to break out of the watch loop cleanly
+    let running = Arc::new(AtomicBool::new(true));
+    let r = running.clone();
+    ctrlc::set_handler(move || {
+        r.store(false, Ordering::Relaxed);
+    })?;
+
     //INFO: File Watcher
     let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
     let mut watcher = notify::recommended_watcher(tx)?;
     watcher.watch(Path::new("."), RecursiveMode::Recursive)?;
     let mut machine = SavePoint::new(program, args);
     //INFO: Main UI Loop
-    loop {
+    while running.load(Ordering::Relaxed) {
         log(&"Monitoring...".white().bold());
         machine = machine.test(program, dryrun, quiet)?;
-        blockforfile(&rx, &extension);
+        if !running.load(Ordering::Relaxed) {
+            break;
+        }
+        blockforfile(&rx, &extension, &running);
         if cli.clear {
             clear();
         }
     }
+
+    log(&"Finalizing savepoint...".yellow().bold());
+    merge_squashed(&starting_branch, dryrun, None)?;
+    Ok(())
 }
-fn blockforfile(rx: &Receiver<Result<Event, notify::Error>>, extension: &str) {
+
+fn blockforfile(
+    rx: &Receiver<Result<Event, notify::Error>>,
+    extension: &str,
+    running: &AtomicBool,
+) {
     loop {
+        // check if SIGINT has been sent and return from loop to stop
+        if !running.load(Ordering::Relaxed) {
+            return;
+        }
         match rx.recv_timeout(std::time::Duration::from_millis(100)) {
             Ok(Ok(Event {
                 kind: EventKind::Modify(_),
