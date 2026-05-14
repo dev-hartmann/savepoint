@@ -428,4 +428,50 @@ mod tests {
 
         assert!(result.is_err());
     }
+
+    /// Helper: run `git <args>` in the current working directory and assert
+    /// success.
+    fn git(args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    #[rstest]
+    #[serial_test::serial]
+    fn merge_squashed_test() {
+        let original_cwd = std::env::current_dir().unwrap();
+        let temp = tempfile::TempDir::new().unwrap();
+        std::env::set_current_dir(temp.path()).unwrap();
+
+        git(&["init", "-q", "-b", "main"]);
+        git(&["config", "user.email", "test@example.com"]);
+        git(&["config", "user.name", "Test"]);
+        std::fs::write("file.txt", "v0").unwrap();
+        git(&["add", "-A"]);
+        git(&["commit", "-qm", "initial"]);
+        git(&["checkout", "-qb", "feat/foo"]);
+        git(&["checkout", "-qb", "savepoint/test"]);
+        std::fs::write("file.txt", "v1").unwrap();
+        git(&["commit", "-qam", "savepoint commit"]);
+
+        merge_squashed("feat/foo", false, Some("test merge")).unwrap();
+
+        assert_eq!(current_branch().unwrap(), "feat/foo");
+        let log = std::process::Command::new("git")
+            .args(["log", "--oneline"])
+            .output()
+            .unwrap();
+        let log_str = String::from_utf8_lossy(&log.stdout);
+        assert!(log_str.contains("test merge"), "log was: {log_str}");
+
+        // Restore CWD before TempDir drops the dir.
+        std::env::set_current_dir(&original_cwd).unwrap();
+    }
 }
