@@ -168,21 +168,23 @@ fn main() -> Result<()> {
         // We check that git exists by running git --version
         let mut git_version_command = Command::with_args("git", ["--version"]);
         git_version_command.log_command = false;
-        match git_version_command
-            .enable_capture()
-            .run() {
-                Ok(_) => {}
-                Err(e) => {
-                    if let command_run::ErrorKind::Run(run_error) = &e.kind && run_error.kind() == std::io::ErrorKind::NotFound {
-                        // git was not found
-                        return Err(eyre!("could not find `git` command"));
-                    } else {
-                        // Another error occured
-                        return Err(eyre!("checking for `git` command failed with unexpected error {}", e));
-                    }
+        match git_version_command.enable_capture().run() {
+            Ok(_) => {}
+            Err(e) => {
+                if let command_run::ErrorKind::Run(run_error) = &e.kind
+                    && run_error.kind() == std::io::ErrorKind::NotFound
+                {
+                    // git was not found
+                    return Err(eyre!("could not find `git` command"));
+                } else {
+                    // Another error occured
+                    return Err(eyre!(
+                        "checking for `git` command failed with unexpected error {}",
+                        e
+                    ));
                 }
             }
-            
+        }
     }
 
     //INFO: File Watcher
