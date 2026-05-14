@@ -16,6 +16,7 @@ use colored::{ColoredString, Colorize};
 use command_run::{Command, Error, Output};
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 use spinners::{Spinner, Spinners};
+use uuid::Uuid;
 
 use crate::eyre::eyre;
 
@@ -207,6 +208,7 @@ fn blockforfile(rx: &Receiver<Result<Event, notify::Error>>, extension: &str) {
     }
 }
 
+<<<<<<< HEAD
 fn is_git_available() -> Result<()> {
     // We check that git exists by running git --version
     let mut git_version_command = Command::with_args("git", ["--version"]);
@@ -238,6 +240,86 @@ fn is_git_repo() -> Result<()> {
     })
 }
 
+||||||| parent of 83f9f40 (feat: add uuid dependency and git helper fns and merge_squashed fn)
+=======
+fn current_branch() -> Result<String> {
+    let mut command = Command::with_args("git", ["rev-parse", "--abbrev-ref", "HEAD"]);
+    command.log_command = false;
+    command.capture = true;
+    command
+        .run()
+        .map(|output| output.stdout_string_lossy().trim().to_string())
+        .map_err(|_| {
+            eyre!("Git command error.")
+                .with_suggestion(|| "Check if current directory is a git repository")
+        })
+}
+
+fn branch(name: Option<&str>, dryrun: bool) -> Result<String> {
+    let branch_name = name.map_or_else(|| format!("savepoint/{}", Uuid::new_v4()), String::from);
+
+    let log_msg = format!("Switching to branch {branch_name}!");
+
+    let mut cmd_args = vec!["checkout"];
+    if name.is_none() {
+        cmd_args.push("-b");
+    }
+    cmd_args.push(&branch_name);
+
+    if dryrun {
+        log(&format!("(dry run) {log_msg}").green().bold());
+        return Ok(branch_name);
+    }
+    log(&log_msg.green().bold());
+
+    let mut command = Command::with_args("git", cmd_args);
+    command.log_command = false;
+    command.run().map(|_| branch_name).map_err(|_| {
+        eyre!("Git command error.")
+            .with_suggestion(|| "Check if current directory is a git repository")
+    })
+}
+
+fn merge_squashed(starting_branch: &str, dryrun: bool, msg: Option<&str>) -> Result<()> {
+    let savepoint_branch = current_branch()?;
+    let log_msg =
+        format!("Merging squashed savepoints from {savepoint_branch} to {starting_branch}!");
+    if dryrun {
+        log(&format!("(dry run) {log_msg}").green().bold());
+        return Ok(());
+    }
+    log(&log_msg.green().bold());
+
+    // git checkout starting branch
+    branch(Some(starting_branch), dryrun)?;
+
+    // merge squashed commits from savepoint branch
+    let mut merge = Command::with_args("git", ["merge", "--squash", &savepoint_branch]);
+    merge.log_command = false;
+    merge.run().map_err(|_| {
+        eyre!("Squashing commits failed.")
+            .with_suggestion(|| "Resolve conflicts manually and commit.")
+    })?;
+
+    // Cannot use commit fn here, since we don't use '-a'
+    // and error message is different.
+    // Uses optional provided `msg` or creates one.
+    let message = msg.map_or_else(
+        || format!("Savepoint: changes from {savepoint_branch} integrated!"),
+        String::from,
+    );
+
+    let mut commit = Command::with_args("git", ["commit", "-m", &message]);
+    commit.log_command = false;
+    commit.run().map_err(|_| {
+        eyre!("Git commit failed.")
+            .with_suggestion(|| "Check that the squash produced staged changes.")
+    })?;
+
+    Ok(())
+}
+
+>>>>>>> 83f9f40 (feat: add uuid dependency and git helper fns and merge_squashed fn)
 fn commit(msg: &str, dryrun: bool) -> Result<()> {
     if dryrun {
         log(&"(dry run) Autosaving!".green().bold());

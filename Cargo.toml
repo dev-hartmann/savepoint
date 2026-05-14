@@ -18,6 +18,7 @@ command-run = "1.1.2"
 notify = "8.2.0"
 ratatui = "0.30.0"
 spinners = "4.2.0"
+uuid = { version = "1.23.1", features = ["v4"] }
 
 [dev-dependencies]
 tempfile = "3"
