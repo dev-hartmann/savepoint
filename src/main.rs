@@ -455,8 +455,7 @@ mod tests {
 
     use super::*;
 
-    /// Helper: run `git <args>` in the current working directory and assert
-    /// success.
+    /// Helper fn to run `git <args>` in the CWD and assert success.
     fn git(args: &[&str]) {
         let out = std::process::Command::new("git")
             .args(args)
@@ -467,6 +466,22 @@ mod tests {
             "git {args:?} failed: {}",
             String::from_utf8_lossy(&out.stderr)
         );
+    }
+
+    /// Helper fn to a savepoint-ready git repo in the CWD.
+    /// Assumes CWD is already a fresh tempdir.
+    fn setup_savepoint_repo() {
+        git(&["init", "-q", "-b", "main"]);
+        git(&["config", "user.email", "test@example.com"]);
+        git(&["config", "user.name", "Test"]);
+        write("file.txt", "v0").expect("failed to write file.txt v0");
+        git(&["add", "-A"]);
+        git(&["commit", "-qm", "initial"]);
+        git(&["checkout", "-qb", "feat/foo"]);
+        git(&["checkout", "-qb", "savepoint/test"]);
+        write("file.txt", "v1").expect("failed to write file.txt v1");
+        git(&["commit", "-qam", "savepoint commit"]);
+        create_statefile("feat/foo").expect("failed to write statefile");
     }
 
     #[rstest]
@@ -519,16 +534,7 @@ mod tests {
         let temp = tempfile::TempDir::new().expect("could not create tempdir!");
         set_current_dir(temp.path()).expect("failed to set current dir to tempdir");
 
-        git(&["init", "-q", "-b", "main"]);
-        git(&["config", "user.email", "test@example.com"]);
-        git(&["config", "user.name", "Test"]);
-        write("file.txt", "v0").expect("failed to write file.txt v0");
-        git(&["add", "-A"]);
-        git(&["commit", "-qm", "initial"]);
-        git(&["checkout", "-qb", "feat/foo"]);
-        git(&["checkout", "-qb", "savepoint/test"]);
-        write("file.txt", "v1").expect("failed to write file.txt v1");
-        git(&["commit", "-qam", "savepoint commit"]);
+        setup_savepoint_repo();
 
         merge_squashed("feat/foo", Some("test merge".into()), false)
             .expect("merge_squashed failed");
@@ -547,5 +553,132 @@ mod tests {
 
         // Restore CWD before TempDir drops the dir.
         set_current_dir(&original_cwd).expect("Failed to restore CWD");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn statefile_roundtrip() {
+        let original = current_dir().expect("current dir did not return valid pathbuf val!");
+        let tmp = tempfile::tempdir().expect("could not create tempdir!");
+        set_current_dir(tmp.path()).expect("failed to set current dir to tempdir");
+
+        create_statefile("main").expect("create_statefile failed");
+        let branch_info = read_statefile().expect("read_statefile failed");
+        rm_statefile().expect("rm_statefile failed");
+        let statefile_exists = fs::exists(STATEFILE).expect("fs::exists failed");
+
+        set_current_dir(&original).expect("failed to restore original current dir");
+        assert_eq!(branch_info, "main");
+        assert!(!statefile_exists);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn read_statefile_missing_errors() {
+        let original = current_dir().expect("current dir did not return valid pathbuf val!");
+        let tmp = tempfile::tempdir().expect("could not create tempdir!");
+        set_current_dir(tmp.path()).expect("failed to set current dir to tempdir");
+
+        let res = read_statefile();
+
+        set_current_dir(&original).expect("failed to restore original current dir");
+        let err = res.expect_err("read_statefile should error on missing file");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("Could not read statefile"),
+            "error should mention statefile; got: {msg}"
+        );
+    }
+
+    #[rstest]
+    #[serial_test::serial]
+    fn finalize_happy_path() {
+        let original = current_dir().expect("current dir did not return valid pathbuf val!");
+        let tmp = tempfile::TempDir::new().expect("could not create tempdir!");
+        set_current_dir(tmp.path()).expect("failed to set current dir to tempdir");
+
+        setup_savepoint_repo();
+        let res = finalize(Some("done".into()), false);
+        let current_branch = current_branch().expect("current_branch failed");
+        let log = std::process::Command::new("git")
+            .args(["log", "--oneline"])
+            .output()
+            .expect("git log should be available");
+
+        let statefile_exists = fs::exists(STATEFILE).expect("fs::exists failed");
+
+        set_current_dir(&original).expect("failed to restore original current dir");
+        res.expect("finalize should succeed");
+        assert_eq!(current_branch, "feat/foo");
+        let log_str = String::from_utf8_lossy(&log.stdout);
+        assert!(log_str.contains("done"), "log was: {log_str}");
+        assert!(!statefile_exists);
+    }
+
+    #[rstest]
+    #[serial_test::serial]
+    fn finalize_errors_without_statefile() {
+        let original = current_dir().expect("current dir did not return valid pathbuf val!");
+        let tmp = tempfile::TempDir::new().expect("could not create tempdir!");
+        set_current_dir(tmp.path()).expect("failed to set current dir to tempdir");
+
+        git(&["init", "-q", "-b", "main"]);
+        let res = finalize(None, false);
+
+        set_current_dir(&original).expect("failed to restore original current dir");
+        assert!(res.is_err(), "finalize should error without statefile");
+    }
+
+    #[rstest]
+    #[serial_test::serial]
+    fn finalize_succeeds_when_errfile_absent() {
+        let original = current_dir().expect("current dir did not return valid pathbuf val!");
+        let tmp = tempfile::TempDir::new().expect("could not create tempdir!");
+        set_current_dir(tmp.path()).expect("failed to set current dir to tempdir");
+
+        setup_savepoint_repo();
+        // Do not create errfile as rm is best effort and we can go on without it.
+        let res = finalize(None, false);
+
+        set_current_dir(&original).expect("failed to restore original current dir");
+        res.expect("finalize should succeed even when errfile is absent");
+    }
+
+    #[rstest]
+    #[serial_test::serial]
+    fn finalize_removes_errfile_when_present() {
+        let original = current_dir().expect("current dir did not return valid pathbuf val!");
+        let tmp = tempfile::TempDir::new().expect("could not create tempdir!");
+        set_current_dir(tmp.path()).expect("failed to set current dir to tempdir");
+
+        setup_savepoint_repo();
+        create_errfile().expect("create_errfile failed");
+        let res = finalize(None, false);
+        let errfile_exists = fs::exists(ERRFILE).expect("fs::exists failed");
+
+        set_current_dir(&original).expect("failed to restore original current dir");
+        res.expect("finalize should succeed");
+        assert!(!errfile_exists, "errfile should be removed");
+    }
+
+    #[rstest]
+    #[serial_test::serial]
+    fn finalize_dryrun_doesnt_change_state() {
+        let original = current_dir().expect("current dir did not return valid pathbuf val!");
+        let tmp = tempfile::TempDir::new().expect("could not create tempdir!");
+        set_current_dir(tmp.path()).expect("failed to set current dir to tempdir");
+
+        setup_savepoint_repo();
+        let res = finalize(None, true);
+        let current_branch = current_branch().expect("current_branch failed");
+        let statefile_exists = fs::exists(STATEFILE).expect("fs::exists failed");
+
+        set_current_dir(&original).expect("failed to restore original current dir");
+        res.expect("dryrun finalize should succeed");
+        assert_eq!(
+            current_branch, "savepoint/test",
+            "dryrun should not switch branches"
+        );
+        assert!(statefile_exists, "statefile should be preserved in dryrun");
     }
 }
