@@ -54,6 +54,7 @@ enum Commands {
     Finalize {
         #[arg(short, long)]
         message: Option<String>,
+        /// Don't run git merge or commit when tests pass
         #[arg(short, long)]
         dryrun: bool,
     },
@@ -173,7 +174,7 @@ fn start(filetype: &str, command: &[String], dryrun: bool, clear: bool, quiet: b
     create_statefile(&starting_branch)?;
 
     // Switch to savepoint sub-branch
-    let savepoint_branch = branch(None, dryrun)?;
+    branch(None, dryrun)?;
 
     // Install Ctrl-C handler to gracefully exit
     let running = Arc::new(AtomicBool::new(true));
@@ -239,8 +240,7 @@ fn cmdr(program: &str, args: &[String], quiet: bool) -> Result<Output, Error> {
     command.log_command = false;
     command.run()
 }
-#[allow(clippy::panic_in_result_fn)]
-#[allow(clippy::panic)]
+
 fn main() -> Result<()> {
     // INFO: Setup
     color_eyre::install()?;
@@ -384,10 +384,8 @@ fn merge_squashed(starting_branch: &str, msg: Option<String>, dryrun: bool) -> R
     // Cannot use commit fn here, since we don't use '-a'
     // and error message is different.
     // Uses optional provided `msg` or creates one.
-    let message = msg.map_or_else(
-        || format!("Savepoint: changes from {savepoint_branch} integrated!"),
-        String::from,
-    );
+    let message =
+        msg.unwrap_or_else(|| format!("Savepoint: changes from {savepoint_branch} integrated!"));
 
     let mut commit = Command::with_args("git", ["commit", "-m", &message]);
     commit.log_command = false;
@@ -416,9 +414,8 @@ fn commit(msg: &str, dryrun: bool) -> Result<()> {
     }
 }
 
-/// Writes the starting branch to a statefile that persists across savepoint
-/// runs so that subsequent runs so not finalized runs target the same base
-/// branch.
+/// Persists the starting branch to a file so a later `savepoint finalize`
+/// merges into the correct base branch.
 fn create_statefile(starting_branch: &str) -> Result<()> {
     write(STATEFILE, starting_branch)?;
     Ok(())
