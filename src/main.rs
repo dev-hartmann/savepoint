@@ -1,9 +1,9 @@
 #![expect(clippy::as_conversions)]
 #![expect(unused)]
 #![allow(clippy::missing_const_for_fn)]
-use std::env::args;
+use std::env::{current_dir, set_current_dir};
 use std::ffi::OsStr;
-use std::fs;
+use std::fs::{self, read_to_string, remove_file, write};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
@@ -22,24 +22,41 @@ use uuid::Uuid;
 use crate::eyre::eyre;
 
 static ERRFILE: &str = ".checkpoint.error";
+static STATEFILE: &str = ".checkpoint.start";
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Cli {
-    /// Filename extension to watch (eg rs, js, py, java)
-    #[arg(short, long, value_name = "filetype")]
-    filetype: String,
-    /// Command to run (use after -- if your shell requires it)
-    command: Vec<String>,
-    /// Don't run git commit when tests pass
-    #[arg(short, long)]
-    dryrun: bool,
-    /// Clear screen between runs
-    #[arg(short, long)]
-    clear: bool,
-    /// Don't display test output
-    #[arg(short, long)]
-    quiet: bool,
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(clap::Subcommand)]
+enum Commands {
+    /// Start autosave watch loop on a savepoint subbranch
+    Start {
+        /// Filename extension to watch (eg rs, js, py, java)
+        #[arg(short, long, value_name = "filetype")]
+        filetype: String,
+        /// Command to run (use after -- if your shell requires it)
+        command: Vec<String>,
+        /// Don't run git commit when tests pass
+        #[arg(short, long)]
+        dryrun: bool,
+        /// Clear screen between runs
+        #[arg(short, long)]
+        clear: bool,
+        /// Don't display test output
+        #[arg(short, long)]
+        quiet: bool,
+    },
+    /// Stop autosave watch loop and merge
+    Finalize {
+        #[arg(short, long)]
+        message: Option<String>,
+        #[arg(short, long)]
+        dryrun: bool,
+    },
 }
 
 /// State diagram:
@@ -136,6 +153,82 @@ fn log(message: &ColoredString) {
     println!("{message}");
 }
 
+fn start(filetype: &str, command: &[String], dryrun: bool, clear: bool, quiet: bool) -> Result<()> {
+    //INFO: Ensure that if dryrun is not active, that the current environment
+    //      includes the git command
+    if !dryrun {
+        // Check wether git is available.
+        is_git_available()?;
+        // Check if we are running within a git repo.
+        is_git_repo()?;
+    }
+
+    let program = command
+        .first()
+        .ok_or_else(|| eyre!("Missing argument: COMMAND"))?;
+    let args = command.get(1..).ok_or_else(|| eyre!("no program arg"))?;
+
+    // Get current working branch as ref for later
+    let starting_branch = current_branch()?;
+    create_statefile(&starting_branch)?;
+
+    // Switch to savepoint sub-branch
+    let savepoint_branch = branch(None, dryrun)?;
+
+    // Install Ctrl-C handler to gracefully exit
+    let running = Arc::new(AtomicBool::new(true));
+    let r = running.clone();
+    ctrlc::set_handler(move || {
+        r.store(false, Ordering::Relaxed);
+    })?;
+
+    //INFO: File Watcher
+    let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
+    let mut watcher = notify::recommended_watcher(tx)?;
+    watcher.watch(Path::new("."), RecursiveMode::Recursive)?;
+    let mut machine = SavePoint::new(program, args);
+
+    //INFO: Main UI Loop
+    while running.load(Ordering::Relaxed) {
+        log(&"Monitoring...".white().bold());
+        machine = machine.test(program, dryrun, quiet)?;
+        if !running.load(Ordering::Relaxed) {
+            break;
+        }
+        blockforfile(&rx, filetype, &running);
+        if clear {
+            crate::clear();
+        }
+    }
+
+    log(
+        &"Savepoint stopped. Consider running `savepoint finalize` to merge auto-commits."
+            .yellow()
+            .bold(),
+    );
+    Ok(())
+}
+
+fn finalize(message: Option<String>, dryrun: bool) -> Result<()> {
+    if !dryrun {
+        // Check wether git is available.
+        is_git_available()?;
+        // Check if we are running within a git repo.
+        is_git_repo()?;
+    }
+
+    let starting_branch = read_statefile()?;
+    merge_squashed(&starting_branch, message, dryrun)?;
+    let _ = rm_errfile();
+    rm_statefile()?;
+    log(
+        &format!("Finalized! Savepoints squashed into {starting_branch}.")
+            .green()
+            .bold(),
+    );
+    Ok(())
+}
+
 #[expect(clippy::result_large_err)]
 fn cmdr(program: &str, args: &[String], quiet: bool) -> Result<Output, Error> {
     let mut command = Command::with_args(program, args);
@@ -151,87 +244,22 @@ fn cmdr(program: &str, args: &[String], quiet: bool) -> Result<Output, Error> {
 fn main() -> Result<()> {
     // INFO: Setup
     color_eyre::install()?;
+
     let cli = Cli::parse();
-    let dryrun = cli.dryrun;
-    let quiet = cli.quiet;
-    let extension = cli.filetype;
-    let program = cli
-        .command
-        .first()
-        .ok_or_else(|| eyre!("Missing argument: COMMAND"))?;
-    let args = cli
-        .command
-        .get(1..)
-        .ok_or_else(|| eyre!("no program arg"))?;
 
-    //INFO: Ensure that if dryrun is not active, that the current environment
-    //      includes the git command
-
-    if !dryrun {
-        // Check wether git is available.
-        is_git_available()?;
-
-        // Check if we are running within a git repo.
-        is_git_repo()?;
+    match cli.command {
+        Commands::Start {
+            filetype,
+            command,
+            dryrun,
+            clear,
+            quiet,
+        } => {
+            start(&filetype, &command, dryrun, clear, quiet)?;
+        }
+        Commands::Finalize { message, dryrun } => finalize(message, dryrun)?,
     }
 
-    // Get current working branch as ref for later
-    let starting_branch = current_branch()?;
-
-    // Switch to savepoint sub-branch
-    let savepoint_branch = branch(None, dryrun)?;
-
-    // Install Ctrl-C handler to break out of the watch loop cleanly
-    let running = Arc::new(AtomicBool::new(true));
-    let r = running.clone();
-    ctrlc::set_handler(move || {
-        r.store(false, Ordering::Relaxed);
-    })?;
-
-    //INFO: Ensure that if dryrun is not active, that the current environment
-    // includes the git command
-    if !dryrun {
-        // We check that git exists by running git --version
-        let mut git_version_command = Command::with_args("git", ["--version"]);
-        git_version_command.log_command = false;
-        match git_version_command.enable_capture().run() {
-            Ok(_) => {}
-            Err(e) => {
-                if let command_run::ErrorKind::Run(run_error) = &e.kind
-                    && run_error.kind() == std::io::ErrorKind::NotFound
-                {
-                    // git was not found
-                    return Err(eyre!("could not find `git` command"));
-                }
-                // Another error occured
-                return Err(eyre!(
-                    "checking for `git` command failed with unexpected error {}",
-                    e
-                ));
-            }
-        }
-    }
-
-    //INFO: File Watcher
-    let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
-    let mut watcher = notify::recommended_watcher(tx)?;
-    watcher.watch(Path::new("."), RecursiveMode::Recursive)?;
-    let mut machine = SavePoint::new(program, args);
-    //INFO: Main UI Loop
-    while running.load(Ordering::Relaxed) {
-        log(&"Monitoring...".white().bold());
-        machine = machine.test(program, dryrun, quiet)?;
-        if !running.load(Ordering::Relaxed) {
-            break;
-        }
-        blockforfile(&rx, &extension, &running);
-        if cli.clear {
-            clear();
-        }
-    }
-
-    log(&"Finalizing savepoint...".yellow().bold());
-    merge_squashed(&starting_branch, dryrun, None)?;
     Ok(())
 }
 
@@ -332,7 +360,7 @@ fn branch(name: Option<&str>, dryrun: bool) -> Result<String> {
     })
 }
 
-fn merge_squashed(starting_branch: &str, dryrun: bool, msg: Option<&str>) -> Result<()> {
+fn merge_squashed(starting_branch: &str, msg: Option<String>, dryrun: bool) -> Result<()> {
     let savepoint_branch = current_branch()?;
     let log_msg =
         format!("Merging squashed savepoints from {savepoint_branch} to {starting_branch}!");
@@ -388,17 +416,37 @@ fn commit(msg: &str, dryrun: bool) -> Result<()> {
     }
 }
 
+/// Writes the starting branch to a statefile that persists across savepoint
+/// runs so that subsequent runs so not finalized runs target the same base
+/// branch.
+fn create_statefile(starting_branch: &str) -> Result<()> {
+    write(STATEFILE, starting_branch)?;
+    Ok(())
+}
+
+/// Removes the statefile
+fn rm_statefile() -> Result<()> {
+    remove_file(STATEFILE)?;
+    Ok(())
+}
+
+/// Read the statefile for target branch information
+fn read_statefile() -> Result<String> {
+    read_to_string(STATEFILE)
+        .map(|s| s.trim().to_string())
+        .map_err(|_| {
+            eyre!("Could not read statefile")
+                .with_suggestion(|| "Consider running 'savepoint start' first")
+        })
+}
+
 fn create_errfile() -> Result<()> {
-    let mut command = Command::with_args("touch", [ERRFILE]);
-    command.log_command = false;
-    command.run()?;
+    write(ERRFILE, "")?;
     Ok(())
 }
 
 fn rm_errfile() -> Result<()> {
-    let mut command = Command::with_args("rm", [ERRFILE]);
-    command.log_command = false;
-    command.run()?;
+    remove_file(ERRFILE)?;
     Ok(())
 }
 
@@ -407,6 +455,20 @@ mod tests {
     use rstest::*;
 
     use super::*;
+
+    /// Helper: run `git <args>` in the current working directory and assert
+    /// success.
+    fn git(args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
 
     #[rstest]
     #[case(State::Passing, "which", "which")]
@@ -430,11 +492,10 @@ mod tests {
             .output()
             .expect("failed to run `git init` in tempdir");
 
-        let original =
-            std::env::current_dir().expect("current dir did not return valid pathbuf val!");
-        std::env::set_current_dir(tmp.path()).expect("failed to set current dir to tempdir");
+        let original = current_dir().expect("current dir did not return valid pathbuf val!");
+        set_current_dir(tmp.path()).expect("failed to set current dir to tempdir");
         let result = is_git_repo();
-        std::env::set_current_dir(&original).expect("failed to restore original current dir");
+        set_current_dir(&original).expect("failed to restore original current dir");
 
         assert!(result.is_ok());
     }
@@ -444,58 +505,48 @@ mod tests {
     fn is_git_repo_err_outside_repo() {
         let tmp = tempfile::tempdir().expect("could not create tempdir!");
 
-        let original =
-            std::env::current_dir().expect("current dir did not return valid pathbuf val!");
-        std::env::set_current_dir(tmp.path()).expect("failed to set current dir to tempdir");
+        let original = current_dir().expect("current dir did not return valid pathbuf val!");
+        set_current_dir(tmp.path()).expect("failed to set current dir to tempdir");
         let result = is_git_repo();
-        std::env::set_current_dir(&original).expect("failed to restore original current dir");
+        set_current_dir(&original).expect("failed to restore original current dir");
 
         assert!(result.is_err());
-    }
-
-    /// Helper: run `git <args>` in the current working directory and assert
-    /// success.
-    fn git(args: &[&str]) {
-        let out = std::process::Command::new("git")
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(
-            out.status.success(),
-            "git {args:?} failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
     }
 
     #[rstest]
     #[serial_test::serial]
     fn merge_squashed_test() {
-        let original_cwd = std::env::current_dir().unwrap();
-        let temp = tempfile::TempDir::new().unwrap();
-        std::env::set_current_dir(temp.path()).unwrap();
+        let original_cwd = current_dir().expect("current dir did not return valid pathbuf val!");
+        let temp = tempfile::TempDir::new().expect("could not create tempdir!");
+        set_current_dir(temp.path()).expect("failed to set current dir to tempdir");
 
         git(&["init", "-q", "-b", "main"]);
         git(&["config", "user.email", "test@example.com"]);
         git(&["config", "user.name", "Test"]);
-        std::fs::write("file.txt", "v0").unwrap();
+        write("file.txt", "v0").expect("failed to write file.txt v0");
         git(&["add", "-A"]);
         git(&["commit", "-qm", "initial"]);
         git(&["checkout", "-qb", "feat/foo"]);
         git(&["checkout", "-qb", "savepoint/test"]);
-        std::fs::write("file.txt", "v1").unwrap();
+        write("file.txt", "v1").expect("failed to write file.txt v1");
         git(&["commit", "-qam", "savepoint commit"]);
 
-        merge_squashed("feat/foo", false, Some("test merge")).unwrap();
+        merge_squashed("feat/foo", Some("test merge".into()), false)
+            .expect("merge_squashed failed");
 
-        assert_eq!(current_branch().unwrap(), "feat/foo");
+        assert_eq!(
+            current_branch().expect("Current branch should be feat/foo"),
+            "feat/foo"
+        );
+
         let log = std::process::Command::new("git")
             .args(["log", "--oneline"])
             .output()
-            .unwrap();
+            .expect("git log should be available");
         let log_str = String::from_utf8_lossy(&log.stdout);
         assert!(log_str.contains("test merge"), "log was: {log_str}");
 
         // Restore CWD before TempDir drops the dir.
-        std::env::set_current_dir(&original_cwd).unwrap();
+        set_current_dir(&original_cwd).expect("Failed to restore CWD");
     }
 }
