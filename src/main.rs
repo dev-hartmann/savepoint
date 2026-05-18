@@ -270,7 +270,6 @@ fn rm_errfile() -> Result<()> {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
 mod tests {
     use rstest::*;
 
@@ -285,23 +284,24 @@ mod tests {
         let params = &[params];
         let app = SavePoint::new(program, params);
         let run = app.test(program, true, true);
-        assert_eq!(run.unwrap().state, state);
+        assert_eq!(run.expect("SavePoint::test returned an error").state, state);
     }
 
     #[test]
     #[serial_test::serial]
     fn is_git_repo_ok_inside_repo() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = tempfile::tempdir().expect("could not create tempdir!");
         std::process::Command::new("git")
             .arg("init")
             .current_dir(tmp.path())
             .output()
-            .unwrap();
+            .expect("failed to run `git init` in tempdir");
 
-        let original = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let original =
+            std::env::current_dir().expect("current dir did not return valid pathbuf val!");
+        std::env::set_current_dir(tmp.path()).expect("failed to set current dir to tempdir");
         let result = is_git_repo();
-        std::env::set_current_dir(&original).unwrap();
+        std::env::set_current_dir(&original).expect("failed to restore original current dir");
 
         assert!(result.is_ok());
     }
@@ -309,12 +309,13 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn is_git_repo_err_outside_repo() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = tempfile::tempdir().expect("could not create tempdir!");
 
-        let original = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+        let original =
+            std::env::current_dir().expect("current dir did not return valid pathbuf val!");
+        std::env::set_current_dir(tmp.path()).expect("failed to set current dir to tempdir");
         let result = is_git_repo();
-        std::env::set_current_dir(&original).unwrap();
+        std::env::set_current_dir(&original).expect("failed to restore original current dir");
 
         assert!(result.is_err());
     }
