@@ -220,8 +220,10 @@ fn finalize(message: Option<String>, dryrun: bool) -> Result<()> {
 
     let starting_branch = read_statefile()?;
     merge_squashed(&starting_branch, message, dryrun)?;
-    let _ = rm_errfile();
-    rm_statefile()?;
+    if !dryrun {
+        let _ = rm_errfile();
+        rm_statefile()?;
+    }
     log(
         &format!("Finalized! Savepoints squashed into {starting_branch}.")
             .green()
