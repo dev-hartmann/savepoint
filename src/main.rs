@@ -154,6 +154,32 @@ fn log(message: &ColoredString) {
     println!("{message}");
 }
 
+/// Check if savepoint statefile exists and current branch is a savepoint
+/// branch. If not, set up a new savepoint session by creating the statefile and
+/// branching.
+fn setup_or_resume(dryrun: bool) -> Result<()> {
+    let starting_branch = current_branch()?;
+    let on_savepoint_branch = starting_branch.starts_with("savepoint/");
+    if fs::exists(STATEFILE)? && on_savepoint_branch {
+        return Ok(());
+    }
+
+    // If we're on a savepoint branch but no statefile exists, refuse to proceed as
+    // we cannot determine the base branch to merge squashed autosave commits into.
+    if on_savepoint_branch {
+        return Err(eyre!(
+            "Cannot determine base branch for savepoint session on `{starting_branch}`: no statefile found."
+        )
+        .with_suggestion(|| {
+            "Switch to your work branch before running `savepoint start` or `savepoint finalize` to wrap up any existing session."
+        }));
+    }
+
+    create_statefile(&starting_branch)?;
+    branch(None, dryrun)?;
+    Ok(())
+}
+
 fn start(filetype: &str, command: &[String], dryrun: bool, clear: bool, quiet: bool) -> Result<()> {
     //INFO: Ensure that if dryrun is not active, that the current environment
     //      includes the git command
@@ -164,19 +190,15 @@ fn start(filetype: &str, command: &[String], dryrun: bool, clear: bool, quiet: b
         is_git_repo()?;
     }
 
+    //INFO: Set up or resume the savepoint session
+    setup_or_resume(dryrun)?;
+
     let program = command
         .first()
         .ok_or_else(|| eyre!("Missing argument: COMMAND"))?;
     let args = command.get(1..).ok_or_else(|| eyre!("no program arg"))?;
 
-    // Get current working branch as ref for later
-    let starting_branch = current_branch()?;
-    create_statefile(&starting_branch)?;
-
-    // Switch to savepoint sub-branch
-    branch(None, dryrun)?;
-
-    // Install Ctrl-C handler to gracefully exit
+    //INFO: Install Ctrl-C handler to gracefully exit
     let running = Arc::new(AtomicBool::new(true));
     let r = running.clone();
     ctrlc::set_handler(move || {
@@ -659,6 +681,93 @@ mod tests {
         set_current_dir(&original).expect("failed to restore original current dir");
         res.expect("finalize should succeed");
         assert!(!errfile_exists, "errfile should be removed");
+    }
+
+    #[rstest]
+    #[serial_test::serial]
+    fn setup_or_resume_resumes_when_statefile_and_on_savepoint_branch() {
+        let original = current_dir().expect("current dir did not return valid pathbuf val!");
+        let tmp = tempfile::TempDir::new().expect("could not create tempdir!");
+        set_current_dir(tmp.path()).expect("failed to set current dir to tempdir");
+
+        git(&["init", "-q", "-b", "main"]);
+        git(&["config", "user.email", "test@example.com"]);
+        git(&["config", "user.name", "Test"]);
+        write("file.txt", "v0").expect("failed to write file.txt v0");
+        git(&["add", "-A"]);
+        git(&["commit", "-qm", "initial"]);
+        git(&["checkout", "-qb", "savepoint/existing"]);
+        create_statefile("main").expect("create_statefile failed");
+
+        let result = setup_or_resume(false);
+        let on_branch = current_branch().expect("current_branch failed");
+        let statefile = read_statefile().expect("read_statefile failed");
+
+        set_current_dir(&original).expect("failed to restore original current dir");
+        result.expect("setup_or_resume should succeed");
+        assert_eq!(on_branch, "savepoint/existing", "should not switch branch");
+        assert_eq!(statefile, "main", "should not overwrite statefile");
+    }
+
+    #[rstest]
+    #[serial_test::serial]
+    fn setup_or_resume_refuses_on_savepoint_branch_without_statefile() {
+        let original = current_dir().expect("current dir did not return valid pathbuf val!");
+        let tmp = tempfile::TempDir::new().expect("could not create tempdir!");
+        set_current_dir(tmp.path()).expect("failed to set current dir to tempdir");
+
+        git(&["init", "-q", "-b", "main"]);
+        git(&["config", "user.email", "test@example.com"]);
+        git(&["config", "user.name", "Test"]);
+        write("file.txt", "v0").expect("failed to write file.txt v0");
+        git(&["add", "-A"]);
+        git(&["commit", "-qm", "initial"]);
+        git(&["checkout", "-qb", "savepoint/parent"]);
+
+        let result = setup_or_resume(false);
+        let statefile_exists = fs::exists(STATEFILE).expect("fs::exists failed");
+        let on_branch = current_branch().expect("current_branch failed");
+
+        set_current_dir(&original).expect("failed to restore original current dir");
+        let err =
+            result.expect_err("setup_or_resume should refuse on savepoint/* with no statefile");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("Cannot determine base branch"),
+            "error should mention missing base branch; got: {msg}"
+        );
+        assert!(!statefile_exists, "should not have written a statefile");
+        assert_eq!(
+            on_branch, "savepoint/parent",
+            "should not have switched branches"
+        );
+    }
+
+    #[rstest]
+    #[serial_test::serial]
+    fn setup_or_resume_fresh_setup_when_no_statefile_and_normal_branch() {
+        let original = current_dir().expect("current dir did not return valid pathbuf val!");
+        let tmp = tempfile::TempDir::new().expect("could not create tempdir!");
+        set_current_dir(tmp.path()).expect("failed to set current dir to tempdir");
+
+        git(&["init", "-q", "-b", "main"]);
+        git(&["config", "user.email", "test@example.com"]);
+        git(&["config", "user.name", "Test"]);
+        write("file.txt", "v0").expect("failed to write file.txt v0");
+        git(&["add", "-A"]);
+        git(&["commit", "-qm", "initial"]);
+
+        let result = setup_or_resume(false);
+        let statefile = read_statefile().expect("read_statefile failed");
+        let on_branch = current_branch().expect("current_branch failed");
+
+        set_current_dir(&original).expect("failed to restore original current dir");
+        result.expect("setup_or_resume should succeed");
+        assert_eq!(statefile, "main");
+        assert!(
+            on_branch.starts_with("savepoint/"),
+            "should switch to savepoint/ branch; got: {on_branch}"
+        );
     }
 
     #[rstest]
